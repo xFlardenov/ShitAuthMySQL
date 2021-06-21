@@ -1,0 +1,152 @@
+package git.io.ShitAuth.api;
+
+import java.util.concurrent.*;
+
+import git.io.ShitAuth.Main;
+
+import java.io.*;
+import java.net.*;
+import java.lang.reflect.*;
+import java.sql.*;
+import java.util.*;
+
+public class MySQL {
+
+    private static List<MySQL> connections;
+    private Connection connection;
+    private ExecutorService executor;
+    private Type type;
+    private String host;
+    private String database;
+    private String user;
+    private String password;
+    private File sqlfile;
+    
+    private MySQL(final Type type, final String host, final String user, final String password) {
+        this.host = host;
+        this.user = user;
+        this.password = password;
+        this.type = type;
+        this.executor = Executors.newSingleThreadExecutor();
+        MySQL.connections.add(this);
+    }
+    
+    public MySQL(final Type type, final String host, final String user, final String password, final String database) {
+        this(type, host, user, password);
+        this.database = database;
+        if (type == Type.SQLITE) {
+            this.sqlfile = new File(Main.getInstance().getDataFolder(), database + ".db");
+            if (!this.sqlfile.exists()) {
+                try {
+                    this.sqlfile.createNewFile();
+                }
+                catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+    }
+    
+    public MySQL(final Type type, final String database) {
+        this(type, Main.MYSQL_HOST, Main.MYSQL_USER, Main.MYSQL_PASSWORD);
+        this.database = database;
+        if (type == Type.SQLITE) {
+            this.sqlfile = new File(Main.getInstance().getDataFolder(), database + ".db");
+            if (!this.sqlfile.exists()) {
+                try {
+                    this.sqlfile.createNewFile();
+                }
+                catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+    }
+    
+    public static List<MySQL> getConnections() {
+        return MySQL.connections;
+    }
+    
+    public Connection getConnection() {
+        try {
+            if (this.connection == null || this.connection.isClosed()) {
+                this.connect();
+            }
+        }
+        catch (SQLException ex) {
+            ex.printStackTrace();
+        }
+        return this.connection;
+    }
+    
+    public void close() {
+        try {
+            if (this.connection == null) {
+                return;
+            }
+            this.connection.close();
+            this.executor.shutdownNow();
+            MySQL.connections.remove(this);
+        }
+        catch (SQLException ex) {
+            ex.printStackTrace();
+        }
+    }
+    
+    private void connect() {
+        try {
+            if (this.type == Type.SQLITE) {
+                try {
+                    Class.forName("org.sqlite.JDBC");
+                }
+                catch (ClassNotFoundException ignore) {
+                    System.out.println(" ! Not found the sqlite driver.");
+                    System.out.println("Stats loading the sqlite driver...");
+                    try {
+                        final File file = new File(Main.getInstance().getDataFolder(), "sqlite.jar");
+                        final URLClassLoader loader = new URLClassLoader(new URL[] { file.toURI().toURL() });
+                        final Method m = DriverManager.class.getDeclaredMethod("getConnection", String.class, Properties.class, Class.class);
+                        m.setAccessible(true);
+                        this.connection = (Connection)m.invoke(null, "jdbc:sqlite:" + this.sqlfile.getPath(), new Properties(), Class.forName("org.sqlite.JDBC", true, loader));
+                        System.out.println("Successfully loaded the sqlite driver! :D");
+                        return;
+                    }
+                    catch (Exception e2) {
+                        System.out.println("Error loading the sqlite driver.");
+                        System.exit(1);
+                    }
+                }
+            }
+            this.connection = ((this.type == Type.SQLITE) ? DriverManager.getConnection("JDBC:sqlite:" + this.sqlfile.getAbsolutePath()) : DriverManager.getConnection("JDBC:mysql://" + this.host + ":3306/" + this.database + "?autoReconnect=true&maxReconnects=10", this.user, this.password));
+        }
+        catch (SQLException e) {
+            e.printStackTrace();
+        }
+    }
+    
+    public void execute(final String sql) {
+        Statement statement;
+        final Runnable runnable = () -> {
+            try {
+                statement = this.getConnection().createStatement();
+                statement.executeUpdate(sql);
+                statement.close();
+            }
+            catch (SQLException ex) {
+                ex.printStackTrace();
+            }
+            return;
+        };
+        this.executor.execute(runnable);
+    }
+    
+    static {
+    	MySQL.connections = new ArrayList<MySQL>();
+    }
+    
+    public enum Type
+    {
+        SQLITE, 
+        MYSQL;
+    }
+}
